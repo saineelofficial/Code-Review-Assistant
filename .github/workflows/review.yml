@@ -71,7 +71,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLM_MODEL: ${{ env.LLM_MODEL }}
         run: |
-          python scripts/ci_review.py || {
+          python app/scripts/ci_review.py || {
             echo "❌ ci_review.py failed, dumping recent logs"; 
             tail -n 200 /tmp/ollama.log || true;
             exit 1;
