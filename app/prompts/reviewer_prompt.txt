@@ -10,4 +10,4 @@ Output (Markdown):
 - Findings: For each -> (Severity: High/Med/Low) + Evidence (file:line) + Why it matters + Concrete recommendation.
 - Optional Patch: a minimal unified diff that fixes the issue(s).
 
-If no issues: say “No critical issues found” and suggest small improvements. Be concise, specific, and actionable.
+If no issue: say “No critical issues found” and suggest small improvements. Be concise, specific, and actionable.
