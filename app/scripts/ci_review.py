@@ -2,9 +2,9 @@ import json
 import os
 import pathlib
 import httpx
-from app.services import analyzers
-from app.services.diff_utils import prune_patch
-from app.services.llm import review_with_llm
+from services import analyzers
+from services.diff_utils import prune_patch
+from services.llm import review_with_llm
 
 MAX_DIFF_BUDGET = 7000
 PER_FILE_BUDGET = 2000
