@@ -70,6 +70,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLM_MODEL: ${{ env.LLM_MODEL }}
+          PYTHONPATH: .
         run: |
           python app/scripts/ci_review.py || {
             echo "❌ ci_review.py failed, dumping recent logs"; 
