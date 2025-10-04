@@ -45,21 +45,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ./app/requirements.txt
 
-      - name: Start Ollama in Docker
+      - name: Start Ollama (Docker Hub)
         run: |
-          docker run -d --name ollama -p 11434:11434 ghcr.io/ollama/ollama:latest
-          # wait for API to be up
-          timeout 150s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; do sleep 3; done'
+          docker pull ollama/ollama:latest
+          docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
+          # wait for the API to be ready
+          timeout 180s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; do sleep 3; done'
           echo "✅ Ollama container is up"
 
-      - name: Pull model (HTTP API) and wait
+      - name: Pull model via API and wait
         env:
           LLM_MODEL: qwen2.5-coder:7b-instruct
         run: |
-          # ask Ollama to pull the model
-          curl -fsS http://127.0.0.1:11434/api/pull -d "{\"name\":\"$LLM_MODEL\"}"
-          # wait until model shows up in /api/tags
-          timeout 600s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; do sleep 5; done'
+          curl -fsS http://127.0.0.1:11434/api/pull \
+            -H "Content-Type: application/json" \
+            -d "{\"name\":\"$LLM_MODEL\"}"
+          # wait until the model appears in /api/tags
+          timeout 900s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; do sleep 5; done'
           echo "LLM_MODEL=$LLM_MODEL" >> "$GITHUB_ENV"
 
       - name: Run analyzers + LLM review and post PR comment
