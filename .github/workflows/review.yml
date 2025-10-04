@@ -45,26 +45,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ./app/requirements.txt
 
-      - name: Install & start Ollama (local LLM runtime)
-        env:
-          OLLAMA_HOST: 127.0.0.1
+      - name: Start Ollama in Docker
         run: |
-          curl -fsSL https://ollama.com/install.sh | sh
-          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          docker run -d --name ollama -p 11434:11434 ghcr.io/ollama/ollama:latest
           # wait for API to be up
           timeout 150s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; do sleep 3; done'
-          echo "✅ Ollama is up"
+          echo "✅ Ollama container is up"
 
-      - name: Pull model & quick sanity check
+      - name: Pull model (HTTP API) and wait
         env:
-          OLLAMA_HOST: 127.0.0.1
           LLM_MODEL: qwen2.5-coder:7b-instruct
         run: |
-          set -e
-          ollama pull "$LLM_MODEL"
-          # tiny prompt to ensure inference works
-          ollama run "$LLM_MODEL" "return just the word: OK" | sed -n '1,3p'
-          echo "LLM_MODEL=$LLM_MODEL" >> $GITHUB_ENV
+          # ask Ollama to pull the model
+          curl -fsS http://127.0.0.1:11434/api/pull -d "{\"name\":\"$LLM_MODEL\"}"
+          # wait until model shows up in /api/tags
+          timeout 600s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; do sleep 5; done'
+          echo "LLM_MODEL=$LLM_MODEL" >> "$GITHUB_ENV"
 
       - name: Run analyzers + LLM review and post PR comment
         env:
