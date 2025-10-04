@@ -1,0 +1,78 @@
+name: Code Review Assistant
+
+# Run on both same-repo PRs and forks safely.
+# pull_request_target gives write perms to comment on forked PRs,
+# but we must CHECK OUT THE PR HEAD READ-ONLY to avoid executing untrusted code.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine event & ref
+        id: meta
+        run: |
+          echo "event=${{ github.event_name }}" >> $GITHUB_OUTPUT
+          # On pull_request_target, the default checkout is the BASE repo.
+          # We'll fetch the PR HEAD ref explicitly (read-only) to analyze code.
+          echo "repo=${{ github.event.pull_request.head.repo.full_name }}" >> $GITHUB_OUTPUT
+          echo "ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+
+      # Checkout the PR HEAD in read-only mode (no token write perms used to fetch)
+      - name: Checkout PR HEAD safely
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.meta.outputs.repo }}
+          ref: ${{ steps.meta.outputs.ref }}
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ./app/requirements.txt
+
+      - name: Install & start Ollama (local LLM runtime)
+        env:
+          OLLAMA_HOST: 127.0.0.1
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          # wait for API to be up
+          timeout 150s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; do sleep 3; done'
+          echo "✅ Ollama is up"
+
+      - name: Pull model & quick sanity check
+        env:
+          OLLAMA_HOST: 127.0.0.1
+          LLM_MODEL: qwen2.5-coder:7b-instruct
+        run: |
+          set -e
+          ollama pull "$LLM_MODEL"
+          # tiny prompt to ensure inference works
+          ollama run "$LLM_MODEL" "return just the word: OK" | sed -n '1,3p'
+          echo "LLM_MODEL=$LLM_MODEL" >> $GITHUB_ENV
+
+      - name: Run analyzers + LLM review and post PR comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLM_MODEL: ${{ env.LLM_MODEL }}
+        run: |
+          python app/scripts/ci_review.py || {
+            echo "❌ ci_review.py failed, dumping recent logs"; 
+            tail -n 200 /tmp/ollama.log || true;
+            exit 1;
+          }
