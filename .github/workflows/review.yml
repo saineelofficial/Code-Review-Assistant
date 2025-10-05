@@ -93,7 +93,7 @@ jobs:
           LLM_MODEL: ${{ env.LLM_MODEL }}
           PYTHONPATH: .
         run: |
-          python scripts/ci_review.py
+          python app/scripts/ci_review.py
 
       - name: Debug Ollama (only on failure)
         if: ${{ failure() }}
