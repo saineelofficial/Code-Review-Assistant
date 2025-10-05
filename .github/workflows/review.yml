@@ -1,8 +1,5 @@
 name: Code Review Assistant
 
-# Run on both same-repo PRs and forks safely.
-# pull_request_target gives write perms to comment on forked PRs,
-# but we must CHECK OUT THE PR HEAD READ-ONLY to avoid executing untrusted code.
 on:
   pull_request:
     types: [opened, reopened, synchronize]
@@ -14,21 +11,25 @@ permissions:
   pull-requests: write
   issues: write
 
+env:
+  # Smaller model for fast first run (change if you want)
+  LLM_MODEL: starcoder2:3b
+  # Cache path for Ollama models (persists between runs)
+  OLLAMA_CACHE: ${{ github.workspace }}/.cache/ollama
+
 jobs:
   review:
     runs-on: ubuntu-latest
+
     steps:
       - name: Determine event & ref
         id: meta
         run: |
-          echo "event=${{ github.event_name }}" >> $GITHUB_OUTPUT
-          # On pull_request_target, the default checkout is the BASE repo.
-          # We'll fetch the PR HEAD ref explicitly (read-only) to analyze code.
           echo "repo=${{ github.event.pull_request.head.repo.full_name }}" >> $GITHUB_OUTPUT
           echo "ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
 
-      # Checkout the PR HEAD in read-only mode (no token write perms used to fetch)
-      - name: Checkout PR HEAD safely
+      # Checkout the PR HEAD safely (read-only fetch of the contributor's branch)
+      - name: Checkout PR HEAD
         uses: actions/checkout@v4
         with:
           repository: ${{ steps.meta.outputs.repo }}
@@ -40,38 +41,63 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python dependencies
+      # Install pinned deps explicitly (don't rely on PR-modified requirements.txt)
+      - name: Install Python dependencies (pinned)
         run: |
           python -m pip install --upgrade pip
-          pip install -r ./app/requirements.txt
+          pip install \
+            httpx==0.27.2 \
+            rich==13.9.2 \
+            langchain==0.2.12 \
+            langchain-community==0.2.11 \
+            ollama==0.3.3 \
+            semgrep==1.81.0 \
+            bandit==1.7.10
 
-      - name: Start Ollama (Docker Hub)
+      # Restore cached Ollama models (skip huge downloads on subsequent runs)
+      - name: Restore Ollama model cache
+        uses: actions/cache@v4
+        with:
+          path: ./.cache/ollama
+          key: ollama-${{ env.LLM_MODEL }}-${{ runner.os }}-v1
+
+      - name: Start Ollama (Docker Hub) with cache mount
         run: |
+          mkdir -p "$OLLAMA_CACHE"
           docker pull ollama/ollama:latest
-          docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
-          # wait for the API to be ready
+          docker run -d --name ollama -p 11434:11434 \
+            -v "$OLLAMA_CACHE:/root/.ollama" \
+            ollama/ollama:latest
+          # wait for API
           timeout 180s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; do sleep 3; done'
           echo "✅ Ollama container is up"
 
-      - name: Pull model via API and wait
-        env:
-          LLM_MODEL: qwen2.5-coder:7b-instruct
+      - name: Ensure model is available (use cache if possible)
         run: |
-          curl -fsS http://127.0.0.1:11434/api/pull \
-            -H "Content-Type: application/json" \
-            -d "{\"name\":\"$LLM_MODEL\"}"
-          # wait until the model appears in /api/tags
-          timeout 900s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; do sleep 5; done'
-          echo "LLM_MODEL=$LLM_MODEL" >> "$GITHUB_ENV"
+          if curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; then
+            echo "✅ Model already present (cache hit)"
+          else
+            echo "⬇️ Pulling $LLM_MODEL (first run can take a few minutes)"
+            curl -fsS http://127.0.0.1:11434/api/pull \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$LLM_MODEL\"}" || true
 
-      - name: Run analyzers + LLM review and post PR comment
+            # wait up to 8 minutes; don't block forever (fallback to static-only if not ready)
+            timeout 480s bash -c 'until curl -fsS http://127.0.0.1:11434/api/tags | grep -q "$LLM_MODEL"; do sleep 5; done' \
+            || echo "⚠️ Timed out waiting for $LLM_MODEL; review will proceed without LLM."
+          fi
+
+      - name: Run analyzers + (LLM if ready) and post PR comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLM_MODEL: ${{ env.LLM_MODEL }}
           PYTHONPATH: .
         run: |
-          python app/scripts/ci_review.py || {
-            echo "❌ ci_review.py failed, dumping recent logs"; 
-            tail -n 200 /tmp/ollama.log || true;
-            exit 1;
-          }
+          python scripts/ci_review.py
+
+      - name: Debug Ollama (only on failure)
+        if: ${{ failure() }}
+        run: |
+          docker ps -a || true
+          docker logs --tail 200 ollama || true
+          curl -v http://127.0.0.1:11434/api/tags || true
