@@ -5,10 +5,13 @@ import sys
 import traceback
 import httpx
 
+
+print(sys.path)
+
 # --- Import local services (make sure app/__init__.py and app/services/__init__.py exist) ---
-from ..services import analyzers
-from ..services.diff_utils import prune_patch
-from ..services.llm import review_with_llm
+from app.services import analyzers
+from app.services.diff_utils import prune_patch
+from app.services.llm import review_with_llm
 
 MAX_DIFF_BUDGET = 7000
 PER_FILE_BUDGET = 2000
